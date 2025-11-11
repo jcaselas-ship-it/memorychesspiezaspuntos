@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memory de Ajedrez</title>
+    <!-- Carga de Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Carga de la fuente Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <!-- Carga de Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Variables globales para Firebase
+        window.initializeApp = initializeApp;
+        window.getAuth = getAuth;
+        window.signInAnonymously = signInAnonymously;
+        window.signInWithCustomToken = signInWithCustomToken;
+        window.onAuthStateChanged = onAuthStateChanged;
+        window.getFirestore = getFirestore;
+        window.doc = doc;
+        window.getDoc = getDoc;
+        window.setDoc = setDoc;
+    </script>
+    <style>
+        /* Estilos personalizados para el tema de ajedrez y la fuente */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1e293b; /* Slate-800 */
+        }
+        .game-card {
+            /* Asegura que la carta siempre sea un cuadrado y que la superposición sea manejada */
+            width: 100%; 
+            padding-top: 100%; /* Truco para mantener la relación de aspecto 1:1 */
+            position: relative;
+            background-color: #f8fafc; /* Slate-50 - Color de carta sin voltear */
+            transition: transform 0.6s;
+            transform-style: preserve-3d;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+        }
+        .game-card.flipped {
+            transform: rotateY(180deg);
+        }
+        .card-face {
+            /* Mantiene la cara dentro de la caja de la carta */
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            backface-visibility: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            font-weight: 800;
+        }
+        /* CLASE MODIFICADA: Base de la parte trasera */
+        .card-back {
+            color: white;
+            font-size: 2rem;
+            transform: rotateY(0deg);
+        }
+        
+        /* Dorso de las cartas de Pieza (P) */
+        .card-back.type-P {
+            background-color: #64748b; /* Slate-500 */
+            border: 3px solid #334155; /* Slate-700 */
+        }
+        
+        /* Dorso de las cartas de Movimiento (M) */
+        .card-back.type-M {
+            background-color: #4338ca; /* Indigo-700 */
+            border: 3px solid #3730a3; /* Indigo-800 */
+        }
+
+        /* Color para Piezas (Frente) */
+        .card-front.type-P {
+            background-color: #cbd5e1; /* Slate-300 */
+            color: #1e293b;
+            transform: rotateY(180deg);
+            padding: 5px;
+            border: 3px solid #1e293b;
+            font-size: 3rem;
+            line-height: 1;
+        }
+        /* Color para Movimientos (Frente) */
+        .card-front.type-M {
+            background-color: #6366f1; /* Indigo-500 */
+            color: #ffffff;
+            transform: rotateY(180deg);
+            padding: 5px;
+            border: 3px solid #1e293b;
+            font-size: 3rem;
+            line-height: 1;
+        }
+        .card-match {
+            opacity: 0.2;
+            pointer-events: none;
+            transition: opacity 0.5s;
+        }
+        /* Clase para la animación de victoria */
+        @keyframes bounce-in {
+            0% { transform: scale(0.5); opacity: 0; }
+            70% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(1); }
+        }
+        #win-message {
+            animation: bounce-in 0.5s ease-out;
+        }
+    </style>
+</head>
+<body class="min-h-screen p-4 flex flex-col items-center">
+
+    <!-- Encabezado y Marcador -->
+    <header class="text-center mb-6 w-full max-w-lg">
+        <h1 class="text-4xl font-bold text-white mb-2">Memory de Ajedrez</h1>
+        <p class="text-slate-300 mb-4">Empareja la pieza de ajedrez con el símbolo de su movimiento.</p>
+        <div id="stats" class="flex justify-around bg-slate-700 p-3 rounded-xl shadow-lg">
+            <div class="text-center">
+                <p class="text-slate-300 text-sm">Movimientos</p>
+                <p id="moves-count" class="text-2xl font-extrabold text-teal-400">0</p>
+            </div>
+            <div class="text-center">
+                <p class="text-slate-300 text-sm">Emparejados</p>
+                <p id="matched-count" class="text-2xl font-extrabold text-amber-400">0 / 6</p>
+            </div>
+            <div class="text-center">
+                <p class="text-slate-300 text-sm">Mejor Récord</p>
+                <p id="best-score" class="text-2xl font-extrabold text-lime-400">--</p>
+            </div>
+        </div>
+    </header>
+
+    <!-- Contenedor del Tablero -->
+    <main class="w-full max-w-lg">
+        <div id="game-board" class="grid grid-cols-4 gap-3 p-4 bg-slate-900 rounded-xl shadow-2xl aspect-square">
+            <!-- Las cartas se inyectarán aquí por JavaScript -->
+        </div>
+    </main>
+
+    <!-- Botón de Reinicio -->
+    <div class="mt-6 w-full max-w-lg flex justify-center">
+        <button id="reset-button" class="px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-full shadow-lg transition duration-200">
+            Reiniciar Juego
+        </button>
+    </div>
+
+    <!-- Mensaje de Victoria/Modal -->
+    <div id="modal-container" class="fixed inset-0 bg-black bg-opacity-75 hidden items-center justify-center p-4 z-50">
+        <div id="win-message" class="bg-white p-8 rounded-xl shadow-2xl text-center max-w-sm">
+            <h2 class="text-4xl font-extrabold text-green-600 mb-3">¡Victoria!</h2>
+            <p class="text-lg text-slate-700 mb-4">Lo has logrado en <span id="final-moves" class="font-bold text-xl text-indigo-600"></span> movimientos.</p>
+            <p id="new-record-text" class="text-md text-red-500 font-semibold mb-6 hidden">¡Nuevo Récord Personal!</p>
+            <button onclick="document.getElementById('reset-button').click(); document.getElementById('modal-container').classList.add('hidden')" class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-full">
+                Jugar de Nuevo
+            </button>
+        </div>
+    </div>
+    
+<script>
+    // --- Configuración y Variables Globales ---
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+    
+    let db, auth;
+    let userId = 'anon_user'; // Valor inicial de fallback
+
+    // Estructura de las cartas: Pares de Pieza (P) y Movimiento (M)
+    const cardContent = [
+        { type: 'P', key: 'Rook', display: '♜', desc: 'Torre' },
+        { type: 'M', key: 'Rook', display: '＋', desc: 'Ortogonal (recto)' }, // Horizontal y Vertical
+        
+        { type: 'P', key: 'Knight', display: '♞', desc: 'Caballo' },
+        { type: 'M', key: 'Knight', display: 'Ｌ', desc: 'Movimiento en L' },
+        
+        { type: 'P', key: 'Bishop', display: '♝', desc: 'Alfil' },
+        { type: 'M', key: 'Bishop', display: '✕', desc: 'Diagonal' },
+        
+        { type: 'P', key: 'Queen', display: '♛', desc: 'Reina' },
+        { type: 'M', key: 'Queen', display: '🞘', desc: 'Todas las direcciones' }, // Símbolo para cualquier dirección
+        
+        { type: 'P', key: 'King', display: '♚', desc: 'Rey' },
+        { type: 'M', key: 'King', display: '●', desc: 'Un paso en cualquier dirección' },
+        
+        { type: 'P', key: 'Pawn', display: '♟', desc: 'Peón' },
+        { type: 'M', key: 'Pawn', display: '↑', desc: 'Adelante (solo movimiento)' }
+    ];
+
+    let gameBoard = document.getElementById('game-board');
+    let movesCountElement = document.getElementById('moves-count');
+    let matchedCountElement = document.getElementById('matched-count');
+    let bestScoreElement = document.getElementById('best-score');
+    let resetButton = document.getElementById('reset-button');
+
+    let cards = [];
+    let flippedCards = [];
+    let matchCount = 0;
+    let totalMoves = 0;
+    let waitingForMatch = false;
+
+    // --- Funciones de Utilidad ---
+
+    /**
+     * Baraja un array usando el algoritmo Fisher-Yates.
+     * @param {Array} array Array a barajar.
+     * @returns {Array} Array barajado.
+     */
+    function shuffle(array) {
+        let currentIndex = array.length, randomIndex;
+        while (currentIndex !== 0) {
+            randomIndex = Math.floor(Math.random() * currentIndex);
+            currentIndex--;
+            [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
+        }
+        return array;
+    }
+
+    /**
+     * Inicializa la interfaz de usuario con los datos de Firebase.
+     */
+    function updateUI(bestScore) {
+        bestScoreElement.textContent = bestScore === null ? '--' : bestScore;
+        movesCountElement.textContent = totalMoves;
+        matchedCountElement.textContent = `${matchCount} / 6`;
+    }
+
+    // --- Lógica de Firebase (Firestore) ---
+
+    /**
+     * Inicializa Firebase, autentica al usuario y carga el mejor puntaje.
+     */
+    async function initializeFirebase() {
+        if (Object.keys(firebaseConfig).length === 0) {
+            console.error("Firebase config is missing or empty.");
+            return;
+        }
+
+        try {
+            const app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+
+            // Autenticación usando el token personalizado o anónimamente
+            if (initialAuthToken) {
+                await signInWithCustomToken(auth, initialAuthToken);
+            } else {
+                await signInAnonymously(auth);
+            }
+            
+            // onAuthStateChanged se usa para obtener el userId después de la autenticación
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    userId = user.uid;
+                    console.log("Firebase Auth successful. User ID:", userId);
+                    loadBestScore();
+                } else {
+                    // Si falla la autenticación, se usa el userId de fallback (anon_user)
+                    userId = 'anon_user_' + crypto.randomUUID(); 
+                    console.warn("User not authenticated. Using anonymous ID:", userId);
+                }
+            });
+
+        } catch (error) {
+            console.error("Error initializing Firebase or signing in:", error);
+        }
+    }
+
+    /**
+     * Carga el mejor puntaje (menor número de movimientos) del usuario desde Firestore.
+     */
+    async function loadBestScore() {
+        if (!db || !userId) return;
+
+        try {
+            // Ruta de datos privada: /artifacts/{appId}/users/{userId}/game_stats/chess_memory_game
+            const statsRef = doc(db, 
+                'artifacts', appId, 
+                'users', userId, 
+                'game_stats', 'chess_memory_game'
+            );
+            const docSnap = await getDoc(statsRef);
+
+            if (docSnap.exists()) {
+                const bestScore = docSnap.data().bestScore;
+                updateUI(bestScore);
+            } else {
+                updateUI(null);
+            }
+        } catch (error) {
+            console.error("Error loading best score from Firestore:", error);
+        }
+    }
+
+    /**
+     * Guarda el nuevo mejor puntaje si el puntaje actual es mejor.
+     * @param {number} newScore El puntaje (movimientos) del juego actual.
+     */
+    async function saveBestScore(newScore) {
+        if (!db || !userId) return;
+
+        try {
+            const statsRef = doc(db, 
+                'artifacts', appId, 
+                'users', userId, 
+                'game_stats', 'chess_memory_game'
+            );
+            
+            const docSnap = await getDoc(statsRef);
+            let currentBestScore = docSnap.exists() ? docSnap.data().bestScore : null;
+
+            let isNewRecord = false;
+            if (currentBestScore === null || newScore < currentBestScore) {
+                await setDoc(statsRef, { bestScore: newScore }, { merge: true });
+                bestScoreElement.textContent = newScore;
+                isNewRecord = true;
+            }
+            
+            return isNewRecord;
+
+        } catch (error) {
+            console.error("Error saving best score to Firestore:", error);
+            return false;
+        }
+    }
+
+    // --- Lógica del Juego ---
+
+    /**
+     * Crea los elementos de la carta.
+     * @param {Object} content El objeto de contenido de la carta.
+     * @param {number} index El índice de la carta en el array barajado.
+     * @returns {HTMLElement} El elemento DOM de la carta.
+     */
+    function createCardElement(content, index) {
+        // La clase 'game-card' ahora usa padding-top: 100% para forzar el aspecto cuadrado
+        const cardElement = document.createElement('div');
+        cardElement.className = 'game-card'; 
+        cardElement.dataset.key = content.key;
+        cardElement.dataset.index = index;
+        cardElement.addEventListener('click', () => handleCardClick(cardElement));
+
+        const cardBack = document.createElement('div');
+        // Añado la clase CSS dinámica según el tipo de carta (P = Pieza, M = Movimiento) para el dorso
+        cardBack.className = `card-face card-back type-${content.type}`; 
+        cardBack.innerHTML = `<span>?</span>`;
+
+        const cardFront = document.createElement('div');
+        // Añado la clase CSS dinámica según el tipo de carta (P = Pieza, M = Movimiento) para el frente
+        cardFront.className = `card-face card-front type-${content.type}`;
+        cardFront.innerHTML = `
+            <div class="text-center">
+                <span class="${content.type === 'P' ? 'text-6xl' : 'text-5xl'} block">${content.display}</span>
+                <span class="text-sm font-light block mt-1">${content.desc}</span>
+            </div>
+        `;
+        
+        cardElement.appendChild(cardBack);
+        cardElement.appendChild(cardFront);
+        return cardElement;
+    }
+
+    /**
+     * Inicia o reinicia el juego.
+     */
+    function startGame() {
+        totalMoves = 0;
+        matchCount = 0;
+        flippedCards = [];
+        waitingForMatch = false;
+        gameBoard.innerHTML = ''; // Limpiar el tablero
+
+        // 1. Barajar las cartas
+        cards = shuffle([...cardContent]);
+
+        // 2. Crear y añadir las cartas al DOM
+        cards.forEach((content, index) => {
+            const cardElement = createCardElement(content, index);
+            gameBoard.appendChild(cardElement);
+        });
+
+        // 3. Actualizar el marcador
+        updateUI(bestScoreElement.textContent === '--' ? null : parseInt(bestScoreElement.textContent));
+        
+        // 4. Ocultar el modal de victoria por si estaba visible
+        document.getElementById('modal-container').classList.add('hidden');
+    }
+
+    /**
+     * Maneja el clic en una carta.
+     * @param {HTMLElement} card La carta que fue clickeada.
+     */
+    function handleCardClick(card) {
+        // Ignorar si ya se volteó, si ya se emparejó, o si estamos esperando la verificación
+        if (card.classList.contains('flipped') || card.classList.contains('card-match') || waitingForMatch) {
+            return;
+        }
+
+        // Voltear la carta
+        card.classList.add('flipped');
+        flippedCards.push(card);
+
+        if (flippedCards.length === 2) {
+            waitingForMatch = true;
+            totalMoves++;
+            movesCountElement.textContent = totalMoves;
+            checkForMatch();
+        }
+    }
+
+    /**
+     * Comprueba si las dos cartas volteadas son un par.
+     */
+    function checkForMatch() {
+        const [card1, card2] = flippedCards;
+        const key1 = card1.dataset.key;
+        const key2 = card2.dataset.key;
+
+        // Comprobación de pares: Las claves deben coincidir Y los tipos deben ser diferentes (P y M)
+        // Se utiliza la clase del dorso para obtener el tipo de carta de forma fiable.
+        const type1 = card1.querySelector('.card-back').classList.contains('type-P') ? 'P' : 'M';
+        const type2 = card2.querySelector('.card-back').classList.contains('type-P') ? 'P' : 'M';
+
+
+        if (key1 === key2 && type1 !== type2) {
+            // ¡Coincidencia!
+            matchCount++;
+            matchedCountElement.textContent = `${matchCount} / 6`;
+
+            // Marca las cartas como emparejadas permanentemente
+            setTimeout(() => {
+                card1.classList.add('card-match');
+                card2.classList.add('card-match');
+                flippedCards = [];
+                waitingForMatch = false;
+                if (matchCount === 6) {
+                    gameOver();
+                }
+            }, 800);
+            
+        } else {
+            // No coinciden. Volver a voltear después de un tiempo
+            setTimeout(() => {
+                card1.classList.remove('flipped');
+                card2.classList.remove('flipped');
+                flippedCards = [];
+                waitingForMatch = false;
+            }, 1200);
+        }
+    }
+
+    /**
+     * Maneja el fin del juego.
+     */
+    async function gameOver() {
+        const finalMoves = totalMoves;
+        document.getElementById('final-moves').textContent = finalMoves;
+
+        // Comprobar y guardar el mejor puntaje
+        const isNewRecord = await saveBestScore(finalMoves);
+        const newRecordText = document.getElementById('new-record-text');
+        
+        if (isNewRecord) {
+            newRecordText.classList.remove('hidden');
+        } else {
+            newRecordText.classList.add('hidden');
+        }
+
+        // Mostrar el modal de victoria
+        document.getElementById('modal-container').classList.remove('hidden');
+    }
+
+    // --- Inicialización ---
+
+    // 1. Inicializar Firebase (carga de puntaje)
+    window.onload = () => {
+        // La inicialización de Firebase debe ejecutarse en el entorno Canvas.
+        initializeFirebase();
+        // Inicializar el juego
+        startGame();
+    };
+
+    // 2. Asociar el botón de reinicio
+    resetButton.addEventListener('click', startGame);
+
+</script>
+</body>
+</html>
